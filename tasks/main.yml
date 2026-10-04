@@ -1,0 +1,171 @@
+---
+# tasks file for gazzah.cron
+
+- name: Validate cron jobs
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.name is defined and item.name is string and item.name | length > 0
+      - item.name is not search('\n')
+      - item.cron_file is defined and item.cron_file is string
+      - item.cron_file is match('^[A-Za-z0-9_-]+$')
+      - item.job is defined and item.job is string and item.job | length > 0
+      - item.job is not search('\n')
+      - item.job is not search('(^|[^\\\\])%')
+      - item.user is not defined or item.user is match('^[a-z_][a-z0-9_.-]*[$]?$')
+      - >-
+        item.special_time is not defined or
+        (item.special_time in ['reboot', 'yearly', 'annually', 'monthly', 'weekly', 'daily', 'hourly']
+         and item.minute is not defined and item.hour is not defined and item.day is not defined
+         and item.month is not defined and item.weekday is not defined)
+      - item.minute is not defined or (item.minute | string) is match('^[0-9*/,-]+$')
+      - item.hour is not defined or (item.hour | string) is match('^[0-9*/,-]+$')
+      - item.day is not defined or (item.day | string) is match('^[0-9*/,-]+$')
+      - item.month is not defined or (item.month | string) is match('^[0-9A-Za-z*/,-]+$')
+      - item.weekday is not defined or (item.weekday | string) is match('^[0-9A-Za-z*/,-]+$')
+    fail_msg: >-
+      Job cron invalide : {{ item.name | default('<sans name>') if item is mapping else item }}.
+      Attendu : name, job (une ligne, % échappés en \%), cron_file ([A-Za-z0-9_-],
+      pas de point : ignoré par cron sinon), user valide, special_time sans
+      minute/hour/day/month/weekday.
+    quiet: true
+  loop: "{{ cron_jobs }}"
+  loop_control:
+    label: "{{ item.name | default('<sans name>') }}"
+  tags:
+    - configuration
+    - cron
+    - cron-config
+    - cron-cleanup
+
+- name: Validate role parameters
+  tags:
+    - configuration
+    - cron
+    - cron-config
+    - cron-cleanup
+  block:
+    - name: Validate platform
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.os_family | default('') == "Debian"
+        fail_msg: >-
+          Plateforme non supportée : {{ ansible_facts.os_family | default('inconnue (facts non collectés ?)') }},
+          seule la famille Debian est supportée.
+        quiet: true
+
+    - name: Validate cron_jobs is not empty
+      ansible.builtin.assert:
+        that:
+          - cron_jobs | length > 0 or cron_allow_empty | bool
+        fail_msg: >-
+          cron_jobs est vide : refusé pour ne pas supprimer tous les fichiers
+          gérés. Vérifier que la variable est définie pour ce groupe.
+        quiet: true
+
+    - name: Validate cron job names are unique per file
+      vars:
+        cron_job_keys: "{{ cron_jobs | map(attribute='cron_file') | zip(cron_jobs | map(attribute='name')) | map('join', ' / ') | list }}"
+      ansible.builtin.assert:
+        that:
+          - cron_job_keys | unique | length == cron_job_keys | length
+        fail_msg: >-
+          Jobs en double (cron_file / name) :
+          {% for key in cron_job_keys | unique if cron_job_keys.count(key) > 1 %}{{ key }}{{ ', ' if not loop.last }}{% endfor %}.
+        quiet: true
+
+    - name: Validate foreign files are not managed
+      ansible.builtin.assert:
+        that:
+          - cron_foreign_files is sequence
+          - cron_foreign_files is not string
+          - cron_jobs | map(attribute='cron_file') | unique | intersect(cron_foreign_files) | length == 0
+        fail_msg: >-
+          Fichiers gérés par un autre outil utilisés comme cron_file :
+          {{ cron_jobs | map(attribute='cron_file') | unique | intersect(cron_foreign_files | default([])) | join(', ') }}.
+          Les retirer de cron_jobs ou de cron_foreign_files.
+        quiet: true
+
+    - name: Validate managed marker
+      ansible.builtin.assert:
+        that:
+          - cron_managed_marker | length > 0
+        fail_msg: "cron_managed_marker est vide : impossible d'identifier les fichiers gérés."
+        quiet: true
+
+- name: Install cron dependencies
+  ansible.builtin.apt:
+    name: "{{ cron_packages }}"
+    state: "{{ cron_apt_install_state }}"
+    update_cache: "{{ cron_apt_update_cache | bool }}"
+    cache_valid_time: "{{ cron_apt_cache_valid_time }}"
+  tags:
+    - configuration
+    - cron
+    - cron-install
+
+- name: Ensure cron configuration directory exists
+  ansible.builtin.file:
+    path: "{{ cron_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  tags:
+    - configuration
+    - cron
+    - cron-config
+
+# cron relit /etc/cron.d tout seul (mtime du répertoire) : pas de handler.
+- name: Deploy cron files
+  ansible.builtin.template:
+    src: cron.d.j2
+    dest: "{{ cron_config_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "{{ cron_file_mode }}"
+  loop: "{{ cron_jobs | map(attribute='cron_file') | unique | list }}"
+  tags:
+    - configuration
+    - cron
+    - cron-config
+
+- name: Find cron files managed by Ansible
+  ansible.builtin.find:
+    paths: "{{ cron_config_dir }}"
+    file_type: file
+    contains: "# {{ cron_managed_marker | regex_escape }}$"
+  register: cron_managed_files
+  when: cron_remove_orphans | bool
+  tags:
+    - configuration
+    - cron
+    - cron-cleanup
+
+- name: Remove orphaned cron files
+  ansible.builtin.file:
+    path: "{{ cron_config_dir }}/{{ item }}"
+    state: absent
+  loop: >-
+    {{ cron_managed_files.files | default([])
+       | map(attribute='path')
+       | map('basename')
+       | difference(cron_jobs | map(attribute='cron_file'))
+       | difference(cron_foreign_files)
+       | list }}
+  when: cron_remove_orphans | bool
+  tags:
+    - configuration
+    - cron
+    - cron-cleanup
+
+- name: Ensure cron service is started and enabled
+  when: cron_manage_service | bool
+  ansible.builtin.systemd_service:
+    name: "{{ cron_service }}"
+    state: started
+    enabled: true
+  tags:
+    - configuration
+    - cron
+    - cron-install

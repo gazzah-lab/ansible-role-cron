@@ -1,0 +1,11 @@
+# {{ cron_managed_marker }}
+{% for job in cron_jobs | selectattr('cron_file', 'equalto', item) %}
+
+# {{ job.name }}
+{% if job.special_time is defined %}
+{% set schedule = '@' ~ job.special_time %}
+{% else %}
+{% set schedule = [job.minute | default('*'), job.hour | default('*'), job.day | default('*'), job.month | default('*'), job.weekday | default('*')] | join(' ') %}
+{% endif %}
+{{ '#' if (cron_jobs_disabled | bool or job.disabled | default(false) | bool) else '' }}{{ schedule }} {{ job.user | default(cron_default_user) }} {{ job.job }}
+{% endfor %}

@@ -1,0 +1,21 @@
+---
+galaxy_info:
+  role_name: cron
+  namespace: gazzah
+  author: Aymen Gazzah
+  description: Deploy /etc/cron.d files from a job list and remove orphaned managed files
+  license: MIT
+  min_ansible_version: "2.15"
+
+  platforms:
+    - name: Debian
+      versions:
+        - bullseye
+        - bookworm
+        - trixie
+
+  galaxy_tags:
+    - cron
+    - system
+
+dependencies: []

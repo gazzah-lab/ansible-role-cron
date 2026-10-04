@@ -1,0 +1,15 @@
+---
+- name: Test cron
+  hosts: all
+  become: true
+  roles:
+    - role: gazzah.cron
+  vars:
+    cron_manage_service: false
+    cron_jobs:
+      - name: Example cleanup
+        cron_file: example
+        user: root
+        minute: '15'
+        hour: '3'
+        job: /usr/bin/true
