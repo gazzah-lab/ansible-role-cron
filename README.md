@@ -8,7 +8,7 @@ Standalone Ansible role for Debian. Licensed under MIT. Authors: Aymen Gazzah.
 roles:
   - name: gazzah.cron
     src: https://github.com/gazzah-lab/ansible-role-cron.git
-    version: v1.0.0
+    version: v1.0.1
 ```
 
 Run `ansible-galaxy role install -r requirements.yml`. Requires ansible-core >= 2.15, collected facts, and root privilege. Runtime smoke tests use Debian 13; other releases declared in metadata require validation in your environment.
